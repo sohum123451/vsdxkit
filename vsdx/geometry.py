@@ -59,8 +59,9 @@ class Geometry:
         self.rows: dict[str, GeometryRow] = {}  # rows keyed by IX: type(T) + index(IX), each with named cells
         self.shape = shape
 
-        # `Shape.master_shape` rebuilds the master on every access, so ask for
-        # it once; asking twice doubled the work for the same answer
+        # the master is resolved once per Shape and held there; ask for it
+        # once here too, so a shape whose master this is the only reader of
+        # still pays the walk of the master page a single time
         master_shape = shape.master_shape
         master_geometry = master_shape.geometry if master_shape else None
 

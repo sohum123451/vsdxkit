@@ -36,8 +36,8 @@ def geometry_xml(shape: Shape) -> ET.Element:
 def reparse(shape: Shape) -> Shape:
     """Rebuild a Shape from its (possibly edited) XML.
 
-    `Shape.geometry` is built once in `Shape.__init__`, so editing the raw XML
-    of a section means re-reading it to see the effect.
+    `Shape.geometry` is built on first read and then held, so editing the raw
+    XML of a section means re-reading it through a new Shape to see the effect.
     """
     return Shape(xml=shape.xml, parent=shape.parent, page=shape.page)
 
@@ -110,7 +110,10 @@ def test_the_merge_leaves_the_master_geometry_alone(monkeypatch):
     with VisioFile(TEST9) as vis:
         connector = vis.pages[0].find_shape_by_text("Conn A")
         master = connector.master_shape
-        monkeypatch.setattr(Shape, "master_shape", property(lambda self: master))
+        # every instance resolves to this one master object, as memoising the
+        # resolution makes it; the master itself has none, or it would be its
+        # own master and its geometry would never finish building
+        monkeypatch.setattr(Shape, "master_shape", property(lambda self: None if self is master else master))
 
         instance_geometry = reparse(connector).geometry
 
@@ -589,3 +592,84 @@ def test_reprs_identify_the_element_they_describe():
 
 def test_geometry_is_exported_from_the_package_root():
     assert (vsdx.Geometry, vsdx.GeometryRow, vsdx.GeometryCell) == (Geometry, GeometryRow, GeometryCell)
+
+
+# --- when the Geometry is built ---------------------------------------------
+
+
+def test_geometry_is_built_on_first_read_not_when_the_shape_is_built(monkeypatch):
+    """Walking a page mints a Shape per element; none of them build a Geometry.
+
+    Building one resolves the shape's master, which walks the master page, so
+    doing it eagerly made every walk of a page pay for geometry nobody read
+    (#261).
+    """
+    built: list[Shape] = []
+
+    class CountedGeometry(Geometry):
+        def __init__(self, xml, shape):
+            built.append(shape)
+            super().__init__(xml=xml, shape=shape)
+
+    monkeypatch.setattr(vsdx, "Geometry", CountedGeometry)
+
+    with VisioFile(TEST9) as vis:
+        shapes = vis.pages[0].all_shapes
+
+        assert shapes and built == []
+
+        geometry = shapes[0].geometry
+
+        assert len(built) == 1
+        assert shapes[0].geometry is geometry  # held, not rebuilt on each read
+
+
+def test_the_master_is_resolved_once_per_shape(monkeypatch):
+    """Geometry, cells, text and data properties all read through the master."""
+    resolutions = []
+    resolve = Shape._resolve_master_shape
+
+    def counting(self):
+        resolutions.append(self)
+        return resolve(self)
+
+    monkeypatch.setattr(Shape, "_resolve_master_shape", counting)
+
+    with VisioFile(TEST9) as vis:
+        connector = vis.pages[0].find_shape_by_text("Conn A")
+
+        assert connector.geometry is not None
+        assert connector.master_shape is not None
+        assert connector.data_properties is not None
+
+        # by identity: the master resolves its own master (to None) in passing
+        assert sum(1 for shape in resolutions if shape is connector) == 1
+
+
+def test_the_section_is_located_when_the_shape_is_built():
+    """Only building the Geometry is deferred; which section it reads is not.
+
+    `Shape.cells` lists that same section's rows from `__init__`, so the two
+    stay in step: a section removed from the XML afterwards is seen by neither
+    until the shape is read again.
+    """
+    with VisioFile(TEST9) as vis:
+        line = vis.pages[0].find_shape_by_text("Line A")
+        line.xml.remove(geometry_xml(line))
+
+        assert line.geometry is not None  # located before the removal
+        assert "Geometry/LineTo/X" in line.cells
+        assert reparse(line).geometry is None
+
+
+def test_a_cell_added_to_the_master_is_picked_up_by_a_shape_holding_it():
+    """The memo is keyed on the master element's children, not taken on trust."""
+    with VisioFile(os.path.join(basedir, "test5_master.vsdx")) as vis:
+        page = vis.pages[0]
+        shape = next(s for s in page.all_shapes if s.master_page_ID)
+        master_page = shape.master_page
+        assert shape.cell_value("LockDelete") is None
+
+        master_page.child_shapes[0].set_cell_value("LockDelete", 1)
+
+        assert shape.cell_value("LockDelete") == "1"

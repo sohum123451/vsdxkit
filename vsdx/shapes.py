@@ -310,7 +310,11 @@ class Shape:
     shape_name: str | None
     page: vsdx.Page
     cells: dict[str, Cell]
-    geometry: vsdx.Geometry | None
+    _geometry: vsdx.Geometry | None
+    _geometry_xml: Element | None
+    _master_shape: Shape | None
+    _master_shape_resolved: bool
+    _master_shape_key: tuple[Element, ...] | None
     _data_properties: dict[str, DataProperty] | None
     _data_properties_key: tuple[Element, ...] | None
 
@@ -329,15 +333,23 @@ class Shape:
 
         # get Cells in Shape
         self.cells = {}
-        self.geometry = None
+        self._geometry = None
+        self._master_shape = None
+        self._master_shape_resolved = False
+        self._master_shape_key = None
         for e in self.xml.findall(f"{namespace}Cell"):
             cell = Cell(xml=e, shape=self)
             if cell.name is not None:
                 self.cells[cell.name] = cell
         geometry = self.xml.find(f'{namespace}Section[@N="Geometry"]')
+        # the section is located here, alongside the cells read out of it, but
+        # the Geometry object over it is left to the property: building one
+        # resolves this shape's master, and a caller walking a page for ids or
+        # text never looks at geometry at all
+        self._geometry_xml = geometry if type(geometry) is Element else None
         if type(geometry) is Element:
-            # print(f"geometry({type(geometry)}):{geometry}")
-            self.geometry = vsdx.Geometry(xml=geometry, shape=self)
+            # this shape's own Geometry cells, read straight from the XML; the
+            # merged view of the master's is Shape.geometry's job
             for r in geometry.findall(f"{namespace}Row"):
                 row_type = r.attrib["T"]
                 if row_type:
@@ -370,6 +382,31 @@ class Shape:
 
     def __hash__(self):
         return hash((self.ID, self.page.name, self.page.vis.filename))
+
+    @property
+    def geometry(self) -> vsdx.Geometry | None:
+        """This shape's Geometry section, merged with the master's, or ``None``.
+
+        Built on first read and then held for as long as this Shape object
+        lives, so ``shape.geometry`` twice gives the same object and a row
+        written through one read is seen by the next.
+
+        Building it resolves the shape's master, which is why it is deferred:
+        walking a page for ids or text mints a Shape per element and touches
+        no geometry at all.
+
+        Only the building is deferred. Which section it reads is decided when
+        the Shape is built, as :attr:`cells` decides which of that section's
+        rows it lists, so the two stay in step: a section added to or removed
+        from the XML afterwards is seen by neither until the shape is read
+        again. This attribute is read-only - a Geometry is a view of this
+        shape's own section, not something to assign from elsewhere.
+        """
+        if self._geometry_xml is None:
+            return None
+        if self._geometry is None:
+            self._geometry = vsdx.Geometry(xml=self._geometry_xml, shape=self)
+        return self._geometry
 
     @property
     def is_master_shape(self) -> bool:
@@ -419,7 +456,34 @@ class Shape:
 
         Returns this Shape's master as a Shape object (or None)
 
+        The result is held rather than rebuilt on every read. Resolving a
+        master walks the master page and builds a Shape there, and a shape
+        reads through its master for geometry, cells, text and data
+        properties, so the same answer was being paid for several times over.
+
+        The memo is checked against the master element's children, by
+        identity, in the way :attr:`data_properties` is checked against this
+        shape's Property rows: a cell added to, removed from or swapped on the
+        master is picked up on the next read. One limitation remains, the same
+        one :attr:`data_properties` has: the key covers the master shape's own
+        children, not their contents, so a row added *inside* the master's
+        Geometry or Property section leaves the memo in place. Walking the
+        page again resolves it - ``child_shapes`` and ``all_shapes`` mint a
+        Shape per element, so no memo survives a traversal.
         """
+        if self._master_shape_resolved and self._master_shape_key == self._master_shape_state():
+            return self._master_shape
+        self._master_shape = self._resolve_master_shape()
+        self._master_shape_resolved = True
+        self._master_shape_key = self._master_shape_state()
+        return self._master_shape
+
+    def _master_shape_state(self) -> tuple[Element, ...] | None:
+        """The master element's children, by identity: what the memo was built from."""
+        master = self._master_shape
+        return None if master is None else tuple(master.xml)
+
+    def _resolve_master_shape(self) -> Shape | None:
         if self.master_page_ID is None:
             return None  # no master set for this Shape
         master_page = self.page.vis.get_master_page_by_id(self.master_page_ID)
@@ -458,9 +522,9 @@ class Shape:
         over inherited properties:
 
         - A property inherited from a master is resolved when this shape is
-          first read. Editing the master afterwards is not reflected here,
-          because the master is re-resolved as a new object on every access and
-          folding it into the cache key would rebuild it on every call.
+          first read. Editing the master afterwards is not reflected here: the
+          cache key covers this shape's own rows, not the master's, and this
+          shape holds the master it resolved for as long as it lives.
 
         Setting :attr:`DataProperty.value` on an inherited property is safe:
         the property is marked inherited, so writing to it creates an override
