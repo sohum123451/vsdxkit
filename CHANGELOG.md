@@ -8,6 +8,18 @@ From 0.7.1 onward this file is maintained by release-please, which writes a
 section per release from the conventional-commit subjects on `main`. Edit the
 release pull request rather than this file directly.
 
+## [0.8.0](https://github.com/firmfooting/vsdxkit/compare/v0.7.1...v0.8.0) (2026-09-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* allocate shape ids through one path that owns set_max_ids ([#270](https://github.com/firmfooting/vsdxkit/issues/270))
+
+### Bug Fixes
+
+* allocate shape ids through one path that owns set_max_ids ([#270](https://github.com/firmfooting/vsdxkit/issues/270)) ([615212f](https://github.com/firmfooting/vsdxkit/commit/615212f2f9d1a112d0838158d0a4f58cc6341eae))
+* copy an inherited row onto the instance before writing to it ([#272](https://github.com/firmfooting/vsdxkit/issues/272)) ([2f582a4](https://github.com/firmfooting/vsdxkit/commit/2f582a46bc4957ac14731e71da1e57bff33cd513))
+
 ## [0.7.1](https://github.com/firmfooting/vsdxkit/compare/v0.7.0...v0.7.1) (2026-09-13)
 
 **This release fixes a critical security defect. 0.7.0 was withdrawn from PyPI

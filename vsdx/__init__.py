@@ -29,7 +29,7 @@ def pretty_print_element(xml: Element | ET.ElementTree) -> str:
 # tool.setuptools.dynamic, so a static [project].version would go stale in
 # uv.lock on every bump and fail the `uv sync --locked` gate. release-please
 # rewrites the line below; the annotation is how it finds it.
-__version__ = "0.7.1"  # x-release-please-version
+__version__ = "0.8.0"  # x-release-please-version
 
 # Issue #250/#254 review: `Shape.connects` quotes `Connect` in its annotation,
 # and `typing.get_type_hints` evaluates quoted names against the function's
